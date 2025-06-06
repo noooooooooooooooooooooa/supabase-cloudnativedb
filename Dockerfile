@@ -18,41 +18,37 @@ COPY requirements.txt /
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# MINIMAL APPROACH: Install extension without adding PostgreSQL APT repo
-# This avoids version conflicts entirely
-RUN set -xe; \
-	apt-get update; \
-	# Try to install pg-failover-slots from existing repos first
-	apt-get install -y --no-install-recommends \
-		"postgresql-${PG_MAJOR}-pg-failover-slots" \
-	|| ( \
-		echo "Package not found in existing repos, adding PostgreSQL APT repo..."; \
-		apt-get install -y postgresql-common; \
-		/usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y; \
-		apt-get update; \
-		# Hold core packages before installing extension
-		apt-mark hold postgresql-${PG_MAJOR} postgresql-client-${PG_MAJOR}; \
-		apt-get install -y --no-install-recommends \
-			"postgresql-${PG_MAJOR}-pg-failover-slots" \
-	); \
-	echo "=== PostgreSQL version check ==="; \
-	postgres --version; \
-	pg_dump --version; \
-	echo "=== Cleanup ==="; \
-	rm -fr /tmp/* ; \
-	rm -rf /var/lib/apt/lists/*;
+# CRITICAL: Do NOT add the PostgreSQL APT repository to avoid version conflicts
+# The base Supabase image already has all PostgreSQL binaries at the correct version
 
-# Install barman-cloud
+# Verify PostgreSQL versions are consistent (all should be 17.4)
+RUN echo "=== Base Image PostgreSQL Versions ===" && \
+    postgres --version && \
+    pg_dump --version && \
+    pg_ctl --version && \
+    pg_upgrade --version && \
+    echo "=== All versions should show 17.4 ==="
+
+# Install barman-cloud (without touching PostgreSQL packages)
 RUN set -xe; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
+		# We require build dependencies to build snappy 0.6
+		# on Python 3.11 or greater.
+		# TODO: Remove build deps once barman unpins the snappy version or
+		# https://github.com/EnterpriseDB/barman/issues/905 is completed
 		build-essential python3-dev libsnappy-dev \
 		python3-pip \
 		python3-psycopg2 \
 		python3-setuptools \
 	; \
 	pip3 install  --upgrade pip; \
+	# TODO: Remove --no-deps once https://github.com/pypa/pip/issues/9644 is solved
 	pip3 install  --no-deps -r requirements.txt; \
+	# We require build dependencies to build snappy 0.6
+	# on Python 3.11 or greater.
+	# TODO: Remove build deps once barman unpins the snappy version or
+	# https://github.com/EnterpriseDB/barman/issues/905 is completed
 	apt-get remove -y --purge --autoremove \
 		build-essential \
 		python3-dev \
@@ -60,8 +56,15 @@ RUN set -xe; \
 	; \
 	rm -rf /var/lib/apt/lists/*;
 
-# Final version verification
+# Final version verification - ensure no version drift occurred
 RUN echo "=== Final PostgreSQL Version Check ===" && \
     postgres --version && \
     pg_dump --version && \
-    echo "=== End Version Check ==="
+    pg_ctl --version && \
+    pg_upgrade --version && \
+    echo "=== All should still be PostgreSQL 17.4 ==="
+
+# Change the uid of postgres to 26
+# not needed, we use the one from supabase (101:102)
+# RUN usermod -u 26 postgres
+# USER 26
